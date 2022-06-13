@@ -66,7 +66,7 @@ pub enum DeliveryStatus<U, E: Debug> {
     Error(E),
 }
 
-pub type BoxedState<Types> = Box<dyn State<Types> + Send + 'static>;
+pub type BoxedState<Types> = Box<dyn State<Types> + Send>;
 
 pub enum Transition<Types: StateTypes> {
     Same,

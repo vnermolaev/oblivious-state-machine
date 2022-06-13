@@ -194,9 +194,9 @@ where
                 }
                 Transition::Terminal => {
                     log::debug!("[{}]\t\tState is terminal. Completing...", id);
-                    break; // state;
+                    break;
                 }
-            };
+            }
         }
 
         log::debug!("[{}] State machine has completed", id);
