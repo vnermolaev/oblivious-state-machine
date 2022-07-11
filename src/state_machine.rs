@@ -1,13 +1,10 @@
-use crate::feed::Feed;
+use crate::feed::{Feed, FeedError};
 use crate::state::{BoxedState, DeliveryStatus, StateTypes, Transition};
-use anyhow::anyhow;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time;
-
-// TODO [EXCEPTIONS] Proper error handling with `thiserror` instead of `anyhow`
 
 /// A time-bound state machine runner.
 /// Runs a state machine for at most as long as `[time_budget_ms]` milliseconds.
@@ -79,10 +76,9 @@ where
         (rx_on_initialization, rx_result)
     }
 
-    pub fn deliver(&self, message: Types::In) -> anyhow::Result<()> {
-        self.feeder
-            .send(message)
-            .map_err(|_| anyhow!("Can't deliver"))
+    /// Attempts a message delivery, if unsuccessful, returns message back as Err(message).
+    pub fn deliver(&self, message: Types::In) -> Result<(), Types::In> {
+        self.feeder.send(message).map_err(|err| err.0)
     }
 }
 
@@ -126,23 +122,31 @@ where
         responder: oneshot::Sender<TimeBoundStateMachineResult<Types>>,
     ) {
         let result = match time::timeout(time_budget, self.run()).await {
-            Ok(Ok(_)) => Ok(self.state.inner),
-            Ok(Err(error)) => Err(StateMachineError::State {
+            Ok(Ok(())) => Ok(self.state.inner),
+            Ok(Err(StateMachineDriverError::StateError(error))) => Err(StateMachineError::State {
                 error,
                 state: self.state.inner,
                 feed: self.feed,
             }),
+            Ok(Err(StateMachineDriverError::IncomingCommunication(err))) => {
+                Err(StateMachineError::IncomingCommunication(err))
+            }
+            Ok(Err(StateMachineDriverError::OutgoingCommunication(err))) => {
+                Err(StateMachineError::OutgoingCommunication(err))
+            }
             Err(_) => Err(StateMachineError::Timeout {
+                time_budget,
                 state: self.state.inner,
                 feed: self.feed,
-                time_budget,
             }),
         };
 
-        let _ = responder.send(result);
+        responder
+            .send(result)
+            .unwrap_or_else(|_| panic!("[{}] State machine result receiver dropped", self.id));
     }
 
-    pub async fn run(&mut self) -> Result<(), Types::Err> {
+    async fn run(&mut self) -> Result<(), StateMachineDriverError<Types>> {
         let Self {
             id,
             ref mut state,
@@ -154,18 +158,25 @@ where
         loop {
             // Try to Initialize the state.
             log::debug!("[{}] Initialization attempt", id);
-            state.try_initialize();
+            state
+                .try_initialize()
+                .map_err(StateMachineDriverError::OutgoingCommunication)?;
 
             // Attempt to advance.
             log::debug!("[{}] State advance attempt", id);
-            let advanced = state.advance()?;
+            let advanced = state
+                .advance()
+                .map_err(StateMachineDriverError::StateError)?;
 
             match advanced {
                 Transition::Same => {
                     log::debug!("[{}]\t\tState requires more input", id);
 
                     // No advancement. Try to deliver a message.
-                    let message = feed.next().await;
+                    let message = feed
+                        .next()
+                        .await
+                        .map_err(StateMachineDriverError::IncomingCommunication)?;
 
                     match state.deliver(message) {
                         DeliveryStatus::Delivered => {
@@ -178,8 +189,8 @@ where
                             );
                             feed.delay(message);
                         }
-                        DeliveryStatus::Error(_err) => {
-                            todo!("Message processing error")
+                        DeliveryStatus::Error(err) => {
+                            Err(StateMachineDriverError::StateError(err))?;
                         }
                     }
                 }
@@ -223,11 +234,18 @@ impl<Types: StateTypes + 'static> InnerState<Types> {
         }
     }
 
-    fn try_initialize(&mut self) {
+    /// If the inner state is not initialized,
+    /// initializes it and attempts to send out the messages produced on initialization.
+    /// If successful returns OK(()), other wise Err(messages).
+    fn try_initialize(&mut self) -> Result<(), Vec<Types::Out>> {
         if !self.is_initialized {
-            let _ = self.on_initialization.send(self.inner.initialize());
+            self.on_initialization
+                .send(self.inner.initialize())
+                .map_err(|err| err.0)?;
             self.is_initialized = true;
         }
+
+        Ok(())
     }
 
     fn deliver(&mut self, message: Types::In) -> DeliveryStatus<Types::In, Types::Err> {
@@ -244,22 +262,35 @@ impl<Types: StateTypes + 'static> InnerState<Types> {
     }
 }
 
-// TODO Derive Debug.
+/// Possible reasons for erroneous run of the state machine.
+/// This enum provides a rich context in which the state machine run.
 #[derive(Error)]
 pub enum StateMachineError<Types: StateTypes> {
-    // #[error("Internal state error: {error:?}")]
+    #[error("{0:?}")]
+    IncomingCommunication(FeedError),
+
+    #[error("Impossible to send out outgoing messages")]
+    OutgoingCommunication(Vec<Types::Out>),
+
+    #[error("Internal state error: {error:?}")]
     State {
         error: Types::Err,
         state: BoxedState<Types>,
         feed: Feed<Types::In>,
     },
 
-    // #[error("State machine ran longer than permitted: {time_budget_ms:?} ms.")]
+    #[error("State machine ran longer than permitted: {time_budget:?}")]
     Timeout {
+        time_budget: Duration,
         state: BoxedState<Types>,
         feed: Feed<Types::In>,
-        time_budget: Duration,
     },
+}
+
+enum StateMachineDriverError<Types: StateTypes> {
+    IncomingCommunication(FeedError),
+    OutgoingCommunication(Vec<Types::Out>),
+    StateError(Types::Err),
 }
 
 #[cfg(test)]
@@ -488,7 +519,9 @@ mod test {
             Duration::from_secs(5),
         );
 
-        let (_, mut result) = state_machine_runner.run();
+        // _outgoing needs to be in scope otherwise,
+        // the state machine will produce an error not being able to send out messages.
+        let (_outgoing, mut result) = state_machine_runner.run();
 
         let res: TimeBoundStateMachineResult<Types> = loop {
             select! {
@@ -534,7 +567,9 @@ mod test {
             Duration::from_secs(5),
         );
 
-        let (_, mut result) = state_machine_runner.run();
+        // _outgoing needs to be in scope otherwise,
+        // the state machine will produce an error not being able to send out messages.
+        let (_outgoing, mut result) = state_machine_runner.run();
 
         let res: TimeBoundStateMachineResult<Types> = loop {
             select! {
@@ -555,7 +590,9 @@ mod test {
             Err(StateMachineError::Timeout { state: order, .. }) => {
                 assert!(order.is::<OnDisplay>())
             }
-            Err(_) => panic!("Unexpected error"),
+            Err(_) => {
+                panic!("unexpected error")
+            }
         }
     }
 }

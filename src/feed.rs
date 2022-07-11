@@ -1,8 +1,11 @@
 use std::collections::VecDeque;
+use std::fmt::Debug;
+use thiserror::Error;
 use tokio::sync::mpsc;
 
 /// [Feed] combines polling from a queue of messages and a channel. Message can be delayed
 /// and later placed in the queue.
+#[derive(Debug)]
 pub struct Feed<T> {
     /// Messages from [queue] will be delivered first.
     queue: VecDeque<T>,
@@ -23,18 +26,16 @@ impl<T> Feed<T> {
         }
     }
 
-    // TODO Probably return a result.
     /// Draw the next message either from [queue] or [feed].
-    pub(crate) async fn next(&mut self) -> T {
+    pub(crate) async fn next(&mut self) -> Result<T, FeedError> {
         if !self.queue.is_empty() {
-            return self.queue.pop_front().unwrap_or_else(|| {
-                panic!("Popping a message from a non-empty queue must not fail")
-            });
+            return self
+                .queue
+                .pop_front()
+                .ok_or_else(|| panic!("Popping a message from a non-empty queue must not fail"));
         }
 
-        self.feed.recv().await.unwrap_or_else(|| {
-            panic!("Channel has been closed prematurely; More messages are expected")
-        })
+        self.feed.recv().await.ok_or(FeedError::ChannelClosed)
     }
 
     pub(crate) fn delay(&mut self, message: T) {
@@ -48,4 +49,10 @@ impl<T> Feed<T> {
             .rev()
             .for_each(|message| self.queue.push_front(message));
     }
+}
+
+#[derive(Error, Debug)]
+pub enum FeedError {
+    #[error("Channel has been closed prematurely; more messages are expected")]
+    ChannelClosed,
 }
