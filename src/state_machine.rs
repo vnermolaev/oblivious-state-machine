@@ -342,8 +342,8 @@ mod test {
     }
 
     impl State<Types> for OnDisplay {
-        fn desc(&self) -> &'static str {
-            "Item is on display for selling"
+        fn desc(&self) -> String {
+            "Item is on display for selling".to_string()
         }
 
         fn deliver(
@@ -386,8 +386,8 @@ mod test {
     }
 
     impl State<Types> for Placed {
-        fn desc(&self) -> &'static str {
-            "Order has been placed, awaiting verification."
+        fn desc(&self) -> String {
+            "Order has been placed, awaiting verification.".to_string()
         }
 
         fn deliver(
@@ -435,8 +435,8 @@ mod test {
     }
 
     impl State<Types> for Verified {
-        fn desc(&self) -> &'static str {
-            "Order has all required details, awaiting the final confirmation"
+        fn desc(&self) -> String {
+            "Order has all required details, awaiting the final confirmation".to_string()
         }
 
         fn deliver(
@@ -471,8 +471,8 @@ mod test {
     struct Shipped;
 
     impl State<Types> for Shipped {
-        fn desc(&self) -> &'static str {
-            "Order has been shipped"
+        fn desc(&self) -> String {
+            "Order has been shipped".to_string()
         }
 
         fn advance(&self) -> Result<Transition<Types>, <Types as StateTypes>::Err> {
@@ -486,8 +486,8 @@ mod test {
     struct Canceled;
 
     impl State<Types> for Canceled {
-        fn desc(&self) -> &'static str {
-            "Order has been canceled"
+        fn desc(&self) -> String {
+            "Order has been canceled".to_string()
         }
 
         fn advance(&self) -> Result<Transition<Types>, <Types as StateTypes>::Err> {

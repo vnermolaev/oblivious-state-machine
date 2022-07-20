@@ -5,7 +5,7 @@ use std::fmt::Debug;
 /// State may send out some messages at initialization and then only deliver messages in order
 /// to advance to a next state.
 pub trait State<Types: StateTypes>: Downcast {
-    fn desc(&self) -> &'static str;
+    fn desc(&self) -> String;
 
     fn initialize(&self) -> Vec<Types::Out> {
         Vec::new()
@@ -97,8 +97,8 @@ mod test {
     pub(crate) struct Initialization;
 
     impl State<Types> for Initialization {
-        fn desc(&self) -> &'static str {
-            "Initialization"
+        fn desc(&self) -> String {
+            "Initialization".to_string()
         }
 
         fn deliver(
@@ -138,8 +138,8 @@ mod test {
     }
 
     impl State<Types> for Process {
-        fn desc(&self) -> &'static str {
-            "Processing"
+        fn desc(&self) -> String {
+            "Processing".to_string()
         }
 
         fn deliver(
@@ -170,8 +170,8 @@ mod test {
     pub(crate) struct Finish;
 
     impl State<Types> for Finish {
-        fn desc(&self) -> &'static str {
-            "Finishing"
+        fn desc(&self) -> String {
+            "Finishing".to_string()
         }
 
         fn deliver(
