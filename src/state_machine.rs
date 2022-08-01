@@ -163,13 +163,14 @@ where
 
             // Attempt to advance.
             log::debug!("[{}] State advance attempt", id);
-            let advanced = state
-                .advance()
-                .map_err(StateMachineDriverError::StateError)?;
+            let advanced = state.advance().map_err(|err| {
+                log::debug!("[{}] State advance attempt failed with: {:?}", id, err);
+                StateMachineDriverError::StateError(err)
+            })?;
 
             match advanced {
                 Transition::Same => {
-                    log::debug!("[{}]\t\tState requires more input", id);
+                    log::debug!("[{}] State requires more input", id);
 
                     // No advancement. Try to deliver a message.
                     let message = feed
@@ -179,13 +180,10 @@ where
 
                     match state.deliver(message) {
                         DeliveryStatus::Delivered => {
-                            log::debug!("[{}]\t\tMessage has been delivered", id);
+                            log::debug!("[{}] Message has been delivered", id);
                         }
                         DeliveryStatus::Unexpected(message) => {
-                            log::debug!(
-                                "[{}]\t\tUnexpected message. Storing for future attempts",
-                                id
-                            );
+                            log::debug!("[{}] Unexpected message. Storing for future attempts", id);
                             feed.delay(message);
                         }
                         DeliveryStatus::Error(err) => {
@@ -194,7 +192,7 @@ where
                     }
                 }
                 Transition::Next(next) => {
-                    log::debug!("[{}]\t\tState has been advanced to <{}>", id, next.desc());
+                    log::debug!("[{}] State has been advanced to <{}>", id, next.desc());
 
                     // Update the current state.
                     state.advance_to(next);
@@ -203,7 +201,7 @@ where
                     feed.refresh();
                 }
                 Transition::Terminal => {
-                    log::debug!("[{}]\t\tState is terminal. Completing...", id);
+                    log::debug!("[{}] State is terminal. Completing...", id);
                     break;
                 }
             }
@@ -315,11 +313,12 @@ mod test {
     impl StateTypes for Types {
         type In = Message;
         type Out = ();
-        type Err = ();
+        type Err = String;
     }
 
     enum Message {
         PlaceOrder,
+        Damage,
         Verify(Verify),
         FinalConfirmation,
         Cancel,
@@ -334,11 +333,15 @@ mod test {
     #[derive(Debug)]
     struct OnDisplay {
         is_ordered: bool,
+        is_broken: bool,
     }
 
     impl OnDisplay {
         fn new() -> Self {
-            Self { is_ordered: false }
+            Self {
+                is_ordered: false,
+                is_broken: false,
+            }
         }
     }
 
@@ -353,12 +356,17 @@ mod test {
         ) -> DeliveryStatus<Message, <Types as StateTypes>::Err> {
             match message {
                 Message::PlaceOrder => self.is_ordered = true,
+                Message::Damage => self.is_broken = true,
                 _ => return DeliveryStatus::Unexpected(message),
             }
             DeliveryStatus::Delivered
         }
 
         fn advance(&self) -> Result<Transition<Types>, <Types as StateTypes>::Err> {
+            if self.is_broken {
+                return Err("Item is damaged".to_string());
+            }
+
             Ok(if self.is_ordered {
                 Transition::Next(Box::new(Placed::new()))
             } else {
@@ -593,6 +601,61 @@ mod test {
             }
             Err(_) => {
                 panic!("unexpected error")
+            }
+        }
+    }
+
+    // TODO abstract away the setup with the artificial feed.
+
+    #[tokio::test]
+    async fn faulty_state_leads_to_state_machine_termination() {
+        let _ = pretty_env_logger::try_init();
+
+        // initial state.
+        let on_display = OnDisplay::new();
+
+        // feed of un-ordered messages.
+        let mut feed = VecDeque::from(vec![Message::Verify(Verify::Address), Message::Damage]);
+        let mut feeding_interval = time::interval(Duration::from_millis(100));
+        feeding_interval.tick().await;
+
+        let mut state_machine_runner = TimeBoundStateMachineRunner::new(
+            "Order".to_string(),
+            Box::new(on_display),
+            Duration::from_secs(5),
+        );
+
+        // _outgoing needs to be in scope otherwise,
+        // the state machine will produce an error not being able to send out messages.
+        let (_outgoing, mut result) = state_machine_runner.run();
+
+        let res: TimeBoundStateMachineResult<Types> = loop {
+            select! {
+                res = &mut result => {
+                    break res.expect("Result from State Machine must be communicated");
+                }
+                _ = feeding_interval.tick() => {
+                    // feed a message if present.
+                    if let Some(msg) = feed.pop_front() {
+                        let _ = state_machine_runner.deliver(msg);
+                    }
+                }
+            }
+        };
+
+        match res {
+            Ok(_) => panic!("TimeMachine should not have completed"),
+            Err(StateMachineError::Timeout { state: order, .. }) => {
+                assert!(order.is::<OnDisplay>())
+            }
+            Err(err) => {
+                if let StateMachineError::State { error, state, .. } = err {
+                    assert_eq!(error, "Item is damaged".to_string());
+                    assert!(state.is::<OnDisplay>());
+                    log::debug!("{:?}", error);
+                } else {
+                    panic!("Unexpected error")
+                }
             }
         }
     }
