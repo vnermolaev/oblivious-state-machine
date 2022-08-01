@@ -157,9 +157,8 @@ where
 
         loop {
             // Try to Initialize the state.
-            log::debug!("[{}] Initialization attempt", id);
             state
-                .try_initialize()
+                .try_initialize(id)
                 .map_err(StateMachineDriverError::OutgoingCommunication)?;
 
             // Attempt to advance.
@@ -237,11 +236,13 @@ impl<Types: StateTypes + 'static> InnerState<Types> {
     /// If the inner state is not initialized,
     /// initializes it and attempts to send out the messages produced on initialization.
     /// If successful returns OK(()), other wise Err(messages).
-    fn try_initialize(&mut self) -> Result<(), Vec<Types::Out>> {
+    fn try_initialize(&mut self, id: &str) -> Result<(), Vec<Types::Out>> {
         if !self.is_initialized {
-            self.on_initialization
-                .send(self.inner.initialize())
-                .map_err(|err| err.0)?;
+            log::debug!("[{}] Initializing", id);
+
+            let messages = self.inner.initialize();
+
+            self.on_initialization.send(messages).map_err(|err| err.0)?;
             self.is_initialized = true;
         }
 
