@@ -18,8 +18,12 @@ pub trait State<Types: StateTypes>: Downcast {
     }
 
     /// Attempts to advance the state forward.
-    /// This function cannot accept `self` due to unknown size of a trait object,
-    /// see https://doc.rust-lang.org/error-index.html#E0161
+    /// This function my accept `self: Box<Self>` and consume itself,
+    /// which may seem more logical, on the other hand it shall present challenges treating
+    /// self-consuming states:
+    /// - all possible transitions must contain `self` even in the case when the state is not advanceable or terminal,
+    /// - in case of errors: `Types::Err` must also contain `self` to enable traceability of which state errored.
+    /// This conditions tip the scale in favor of `&self` (and thus some memory copying overhead).
     fn advance(&self) -> Result<Transition<Types>, Types::Err>;
 }
 
