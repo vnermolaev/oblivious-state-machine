@@ -73,9 +73,9 @@ where
     }
 }
 
-pub enum Either<A, B> {
-    Messages(A),
-    Result(B),
+pub enum Either<M, R> {
+    Messages { from: StateMachineId, messages: M },
+    Result { from: StateMachineId, result: R },
 }
 
 pub type TimeBoundStateMachineResult<T> = Result<BoxedState<T>, StateMachineError<T>>;
@@ -92,7 +92,7 @@ pub struct StateMachine<Types: StateTypes> {
     feed: Feed<Types::In>,
 
     /// Channel to report outgoing messages and the result.
-    state_machine_sink: StateMachineTx<Types>,
+    state_machine_tx: StateMachineTx<Types>,
 }
 
 impl<Types> StateMachine<Types>
@@ -104,7 +104,7 @@ where
         id: StateMachineId,
         initial_state: BoxedState<Types>,
         feed: mpsc::UnboundedReceiver<Types::In>,
-        state_machine_sink: StateMachineTx<Types>,
+        state_machine_tx: StateMachineTx<Types>,
     ) -> Self {
         log::debug!(
             "[{id:?}] State machine has been initialized at <{}>",
@@ -115,7 +115,7 @@ where
             id,
             state: initial_state,
             feed: Feed::new(feed),
-            state_machine_sink,
+            state_machine_tx,
         }
     }
 
@@ -140,8 +140,11 @@ where
             }),
         };
 
-        self.state_machine_sink
-            .send(Either::Result(result))
+        self.state_machine_tx
+            .send(Either::Result {
+                from: self.id.clone(),
+                result,
+            })
             .unwrap_or_else(|_| panic!("[{:?}] State machine result receiver dropped", self.id));
     }
 
@@ -150,7 +153,7 @@ where
             id,
             ref mut state,
             ref mut feed,
-            ref mut state_machine_sink,
+            ref mut state_machine_tx,
         } = self;
 
         log::debug!("[{id:?}] State machine is running");
@@ -164,10 +167,10 @@ where
 
                 let messages = state.initialize();
 
-                state_machine_sink
-                    .send(Either::Messages(messages))
+                state_machine_tx
+                    .send(Either::Messages{ from: id.clone(), messages })
                     .map_err(|err| {
-                        if let Either::Messages(messages) = err.0 {
+                        if let Either::Messages{messages, ..} = err.0 {
                             StateMachineDriverError::OutgoingCommunication(messages)
                         } else {
                             panic!("[BUG] Sending Either::Messages failed, but reports not being able to send other kind of a message");
@@ -521,10 +524,8 @@ mod test {
 
         let res: TimeBoundStateMachineResult<Types> = loop {
             select! {
-                Some(Either::Result(res)) = state_machine_rx.recv() => {
-                    // let () = res;
-                    // break res.unwrap_or_else(|_| panic!("Result from State Machine must be communicated"));
-                    break res;
+                Some(Either::Result{ result, ..} ) = state_machine_rx.recv() => {
+                    break result;
                 }
                 _ = feeding_interval.tick() => {
                     // feed a message if present.
@@ -570,8 +571,8 @@ mod test {
 
         let res: TimeBoundStateMachineResult<Types> = loop {
             select! {
-                Some(Either::Result(res)) =  state_machine_rx.recv() => {
-                    break res;
+                Some(Either::Result{result, ..}) =  state_machine_rx.recv() => {
+                    break result;
                 }
                 _ = feeding_interval.tick() => {
                     // feed a message if present.
@@ -618,8 +619,8 @@ mod test {
 
         let res: TimeBoundStateMachineResult<Types> = loop {
             select! {
-                Some(Either::Result(res)) = state_machine_rx.recv() => {
-                    break res;
+                Some(Either::Result{result, ..}) = state_machine_rx.recv() => {
+                    break result;
                 }
                 _ = feeding_interval.tick() => {
                     // feed a message if present.
