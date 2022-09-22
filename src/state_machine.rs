@@ -10,7 +10,7 @@ use tokio::time;
 /// Runs a state machine for at most as long as `[time_budget_ms]` milliseconds.
 /// It is a convenient interface to deliver and receive messages from the inner state machine.
 pub struct TimeBoundStateMachineRunner<Types: StateTypes> {
-    pub id: String,
+    pub id: StateMachineId,
     initial_state: Option<BoxedState<Types>>,
     feed: Option<mpsc::UnboundedReceiver<Types::In>>,
     feeder: mpsc::UnboundedSender<Types::In>,
@@ -24,10 +24,14 @@ where
     Types::Out: Send,
     Types::Err: Send,
 {
-    pub fn new(id: String, initial_state: BoxedState<Types>, time_budget: Duration) -> Self {
+    pub fn new(
+        id: StateMachineId,
+        initial_state: BoxedState<Types>,
+        time_budget: Duration,
+    ) -> Self {
         log::debug!(
-            "[{}] Time-bound state machine runner for state machine [{}] is initializing with budget {:?}",
-            id, id, time_budget
+            "[{id:?}] Time-bound state machine runner for state machine [{id:?}] is initializing with budget {:?}",
+            time_budget
         );
 
         let (feeder, feed) = mpsc::unbounded_channel();
@@ -87,7 +91,7 @@ pub type TimeBoundStateMachineResult<T> = Result<BoxedState<T>, StateMachineErro
 /// State machine that takes an initial states and attempts to advance it until the terminal state.
 pub struct StateMachine<Types: StateTypes> {
     /// id for this state machine.
-    id: String,
+    id: StateMachineId,
 
     /// State is wrapped into [InnerState] that also maintains a flag whether the state has been initialized.
     state: InnerState<Types>,
@@ -102,14 +106,13 @@ where
     Types::In: Send,
 {
     pub fn new(
-        id: String,
+        id: StateMachineId,
         initial_state: BoxedState<Types>,
         feed: mpsc::UnboundedReceiver<Types::In>,
         on_initialization: mpsc::UnboundedSender<Vec<Types::Out>>,
     ) -> Self {
         log::debug!(
-            "[{}] State machine has been initialized at <{}>",
-            id,
+            "[{id:?}] State machine has been initialized at <{}>",
             initial_state.desc()
         );
 
@@ -147,7 +150,7 @@ where
 
         responder
             .send(result)
-            .unwrap_or_else(|_| panic!("[{}] State machine result receiver dropped", self.id));
+            .unwrap_or_else(|_| panic!("[{:?}] State machine result receiver dropped", self.id));
     }
 
     async fn run(&mut self) -> Result<(), StateMachineDriverError<Types>> {
@@ -157,7 +160,7 @@ where
             ref mut feed,
         } = self;
 
-        log::debug!("[{}] State machine is running", id);
+        log::debug!("[{id:?}] State machine is running");
 
         loop {
             // Try to Initialize the state.
@@ -166,15 +169,15 @@ where
                 .map_err(StateMachineDriverError::OutgoingCommunication)?;
 
             // Attempt to advance.
-            log::debug!("[{}] State advance attempt", id);
+            log::debug!("[{id:?}] State advance attempt");
             let advanced = state.advance().map_err(|err| {
-                log::debug!("[{}] State advance attempt failed with: {:?}", id, err);
+                log::debug!("[{id:?}] State advance attempt failed with: {err:?}");
                 StateMachineDriverError::StateError(err)
             })?;
 
             match advanced {
                 Transition::Same => {
-                    log::debug!("[{}] State requires more input", id);
+                    log::debug!("[{id:?}] State requires more input");
 
                     // No advancement. Try to deliver a message.
                     let message = feed
@@ -184,10 +187,10 @@ where
 
                     match state.deliver(message) {
                         DeliveryStatus::Delivered => {
-                            log::debug!("[{}] Message has been delivered", id);
+                            log::debug!("[{id:?}] Message has been delivered");
                         }
                         DeliveryStatus::Unexpected(message) => {
-                            log::debug!("[{}] Unexpected message. Storing for future attempts", id);
+                            log::debug!("[{id:?}] Unexpected message. Storing for future attempts");
                             feed.delay(message);
                         }
                         DeliveryStatus::Error(err) => {
@@ -196,7 +199,7 @@ where
                     }
                 }
                 Transition::Next(next) => {
-                    log::debug!("[{}] State has been advanced to <{}>", id, next.desc());
+                    log::debug!("[{id:?}] State has been advanced to <{}>", next.desc());
 
                     // Update the current state.
                     state.advance_to(next);
@@ -205,13 +208,13 @@ where
                     feed.refresh();
                 }
                 Transition::Terminal => {
-                    log::debug!("[{}] State is terminal. Completing...", id);
+                    log::debug!("[{id:?}] State is terminal. Completing...");
                     break;
                 }
             }
         }
 
-        log::debug!("[{}] State machine has completed", id);
+        log::debug!("[{id:?}] State machine has completed");
         Ok(())
     }
 }
@@ -238,9 +241,9 @@ impl<Types: StateTypes + 'static> InnerState<Types> {
     /// If the inner state is not initialized,
     /// initializes it and attempts to send out the messages produced on initialization.
     /// If successful returns OK(()), other wise Err(messages).
-    fn try_initialize(&mut self, id: &str) -> Result<(), Vec<Types::Out>> {
+    fn try_initialize(&mut self, id: &StateMachineId) -> Result<(), Vec<Types::Out>> {
         if !self.is_initialized {
-            log::debug!("[{}] Initializing <{}>", id, self.inner.desc());
+            log::debug!("[{id:?}] Initializing <{}>", self.inner.desc());
 
             let messages = self.inner.initialize();
 
@@ -262,6 +265,15 @@ impl<Types: StateTypes + 'static> InnerState<Types> {
     fn advance_to(&mut self, inner: BoxedState<Types>) {
         self.is_initialized = false;
         self.inner = inner;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StateMachineId(String);
+
+impl From<&str> for StateMachineId {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
     }
 }
 
@@ -529,7 +541,7 @@ mod test {
         feeding_interval.tick().await;
 
         let mut state_machine_runner = TimeBoundStateMachineRunner::new(
-            "Order".to_string(),
+            "Order".into(),
             Box::new(on_display),
             Duration::from_secs(5),
         );
@@ -577,7 +589,7 @@ mod test {
         feeding_interval.tick().await;
 
         let mut state_machine_runner = TimeBoundStateMachineRunner::new(
-            "Order".to_string(),
+            "Order".into(),
             Box::new(on_display),
             Duration::from_secs(5),
         );
@@ -626,7 +638,7 @@ mod test {
         feeding_interval.tick().await;
 
         let mut state_machine_runner = TimeBoundStateMachineRunner::new(
-            "Order".to_string(),
+            "Order".into(),
             Box::new(on_display),
             Duration::from_secs(5),
         );
