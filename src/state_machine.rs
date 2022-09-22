@@ -10,7 +10,7 @@ use tokio::time;
 /// Runs a state machine for at most as long as `[time_budget_ms]` milliseconds.
 /// It is a convenient interface to deliver and receive messages from the inner state machine.
 pub struct TimeBoundStateMachineRunner<Types: StateTypes> {
-    id: String,
+    pub id: String,
     initial_state: Option<BoxedState<Types>>,
     feed: Option<mpsc::UnboundedReceiver<Types::In>>,
     feeder: mpsc::UnboundedSender<Types::In>,
