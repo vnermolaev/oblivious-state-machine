@@ -320,6 +320,7 @@ mod test {
         type Err = String;
     }
 
+    #[derive(Debug)]
     enum Message {
         PlaceOrder,
         Damage,
@@ -328,6 +329,7 @@ mod test {
         Cancel,
     }
 
+    #[derive(Debug)]
     enum Verify {
         Address,
         PaymentDetails,
