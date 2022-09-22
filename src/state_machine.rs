@@ -249,6 +249,18 @@ impl From<&str> for StateMachineId {
     }
 }
 
+impl From<String> for StateMachineId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl StateMachineId {
+    pub fn id(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Possible reasons for erroneous run of the state machine.
 /// This enum provides a rich context in which the state machine run.
 #[derive(Error)]
