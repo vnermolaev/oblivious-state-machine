@@ -107,7 +107,11 @@ where
         feed: mpsc::UnboundedReceiver<Types::In>,
         on_initialization: mpsc::UnboundedSender<Vec<Types::Out>>,
     ) -> Self {
-        log::debug!("[{}] State machine has been initialized", id);
+        log::debug!(
+            "[{}] State machine has been initialized at <{}>",
+            id,
+            initial_state.desc()
+        );
 
         Self {
             id,
@@ -236,7 +240,7 @@ impl<Types: StateTypes + 'static> InnerState<Types> {
     /// If successful returns OK(()), other wise Err(messages).
     fn try_initialize(&mut self, id: &str) -> Result<(), Vec<Types::Out>> {
         if !self.is_initialized {
-            log::debug!("[{}] Initializing", id);
+            log::debug!("[{}] Initializing <{}>", id, self.inner.desc());
 
             let messages = self.inner.initialize();
 
@@ -316,6 +320,7 @@ mod test {
         type Err = String;
     }
 
+    #[derive(Debug)]
     enum Message {
         PlaceOrder,
         Damage,
@@ -324,6 +329,7 @@ mod test {
         Cancel,
     }
 
+    #[derive(Debug)]
     enum Verify {
         Address,
         PaymentDetails,

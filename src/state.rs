@@ -59,12 +59,13 @@ where
 // =====================
 
 pub trait StateTypes {
-    type In;
-    type Out;
+    type In: Debug;
+    type Out: Debug;
     type Err: Debug;
 }
 
-pub enum DeliveryStatus<U, E: Debug> {
+#[derive(Debug)]
+pub enum DeliveryStatus<U: Debug, E: Debug> {
     Delivered,
     Unexpected(U),
     Error(E),
@@ -76,6 +77,16 @@ pub enum Transition<Types: StateTypes> {
     Same,
     Next(BoxedState<Types>),
     Terminal,
+}
+
+impl<Types: StateTypes + 'static> Debug for Transition<Types> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match self {
+            Transition::Same => write!(formatter, "Same"),
+            Transition::Next(state) => write!(formatter, "Next: <{}>", state.desc()),
+            Transition::Terminal => write!(formatter, "Terminal"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -91,6 +102,7 @@ mod test {
     }
 
     #[allow(dead_code)]
+    #[derive(Debug)]
     enum Incoming {
         P1,
         P2(()),
