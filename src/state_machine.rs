@@ -240,7 +240,7 @@ pub type StateMachineRx<Types> = mpsc::UnboundedReceiver<
     Either<Vec<<Types as StateTypes>::Out>, TimeBoundStateMachineResult<Types>>,
 >;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct StateMachineId(String);
 
 impl From<&str> for StateMachineId {
