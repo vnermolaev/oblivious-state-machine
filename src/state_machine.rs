@@ -1,5 +1,6 @@
 use crate::feed::{Feed, FeedError};
 use crate::state::{BoxedState, DeliveryStatus, StateTypes, Transition};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -240,7 +241,7 @@ pub type StateMachineRx<Types> = mpsc::UnboundedReceiver<
     Either<Vec<<Types as StateTypes>::Out>, TimeBoundStateMachineResult<Types>>,
 >;
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct StateMachineId(String);
 
 impl From<&str> for StateMachineId {
