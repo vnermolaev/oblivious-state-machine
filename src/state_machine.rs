@@ -6,6 +6,9 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::time;
 
+#[cfg(feature = "tracing")]
+use tracing::Span;
+
 /// A time-bound state machine runner.
 /// Runs a state machine for at most as long as `[time_budget_ms]` milliseconds.
 /// It is a convenient interface to deliver and receive messages from the inner state machine.
@@ -15,6 +18,9 @@ pub struct TimeBoundStateMachineRunner<Types: StateTypes> {
     feed: Option<mpsc::UnboundedReceiver<Types::In>>,
     feeder: mpsc::UnboundedSender<Types::In>,
     time_budget: Duration,
+
+    #[cfg(feature = "tracing")]
+    span: Span,
 }
 
 impl<Types> TimeBoundStateMachineRunner<Types>
@@ -28,6 +34,8 @@ where
         id: StateMachineId,
         initial_state: BoxedState<Types>,
         time_budget: Duration,
+
+        #[cfg(feature = "tracing")] span: Span,
     ) -> Self {
         log::debug!(
             "[{id:?}] Time-bound state machine runner for state machine [{id:?}] is initializing with budget {:?}",
@@ -42,6 +50,9 @@ where
             feed: Some(feed),
             feeder,
             time_budget,
+
+            #[cfg(feature = "tracing")]
+            span,
         }
     }
 
@@ -58,8 +69,15 @@ where
             .expect("A channel for state machine communication is expected");
 
         // State machine is ready.
-        let state_machine =
-            StateMachine::new(self.id.clone(), initial_state, feed, state_machine_sink);
+        let state_machine = StateMachine::new(
+            self.id.clone(),
+            initial_state,
+            feed,
+            state_machine_sink,
+            // Add Span when feature 'tracing' is enabled
+            #[cfg(feature = "tracing")]
+            self.span.clone(),
+        );
 
         let time_budget = self.time_budget;
 
@@ -75,8 +93,20 @@ where
 }
 
 pub enum Either<M, R> {
-    Messages { from: StateMachineId, messages: M },
-    Result { from: StateMachineId, result: R },
+    Messages {
+        from: StateMachineId,
+        messages: M,
+
+        #[cfg(feature = "tracing")]
+        span: Span,
+    },
+    Result {
+        from: StateMachineId,
+        result: R,
+
+        #[cfg(feature = "tracing")]
+        span: Span,
+    },
 }
 
 pub type TimeBoundStateMachineResult<T> = Result<BoxedState<T>, StateMachineError<T>>;
@@ -94,6 +124,9 @@ pub struct StateMachine<Types: StateTypes> {
 
     /// Channel to report outgoing messages and the result.
     state_machine_tx: StateMachineTx<Types>,
+
+    #[cfg(feature = "tracing")]
+    span: Span,
 }
 
 impl<Types> StateMachine<Types>
@@ -106,6 +139,8 @@ where
         initial_state: BoxedState<Types>,
         feed: mpsc::UnboundedReceiver<Types::In>,
         state_machine_tx: StateMachineTx<Types>,
+
+        #[cfg(feature = "tracing")] span: Span,
     ) -> Self {
         log::debug!(
             "[{id:?}] State machine has been initialized at <{}>",
@@ -117,6 +152,9 @@ where
             state: initial_state,
             feed: Feed::new(feed),
             state_machine_tx,
+
+            #[cfg(feature = "tracing")]
+            span,
         }
     }
 
@@ -145,16 +183,23 @@ where
             .send(Either::Result {
                 from: self.id.clone(),
                 result,
+
+                #[cfg(feature = "tracing")]
+                span: self.span,
             })
             .unwrap_or_else(|_| panic!("[{:?}] State machine result receiver dropped", self.id));
     }
 
+    #[cfg_attr(feature = "tracing", tracing::instrument[parent = &self.span, skip_all])]
     async fn run(&mut self) -> Result<(), StateMachineDriverError<Types>> {
         let Self {
             id,
             ref mut state,
             ref mut feed,
             ref mut state_machine_tx,
+
+            #[cfg(feature = "tracing")]
+            span,
         } = self;
 
         log::debug!("[{id:?}] State machine is running");
@@ -169,7 +214,12 @@ where
                 let messages = state.initialize();
 
                 state_machine_tx
-                    .send(Either::Messages{ from: id.clone(), messages })
+                    .send(Either::Messages{
+                        from: id.clone(),
+                        messages,
+
+                        #[cfg(feature = "tracing")] span: span.clone()
+                    })
                     .map_err(|err| {
                         if let Either::Messages{messages, ..} = err.0 {
                             StateMachineDriverError::OutgoingCommunication(messages)
@@ -304,6 +354,18 @@ mod test {
     use std::time::Duration;
     use tokio::sync::mpsc;
     use tokio::{select, time};
+
+    #[cfg(feature = "tracing")]
+    use tracing::info_span;
+
+    pub fn setup_logging_or_tracing(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        if cfg!(feature = "tracing") {
+            tracing_subscriber::fmt::try_init()
+        } else {
+            pretty_env_logger::try_init().map_err(|e| e.into())
+        }
+    }
 
     /// This module tests an order state machine.
     /// Item's lifecycle
@@ -511,7 +573,7 @@ mod test {
 
     #[tokio::test]
     async fn order_goes_to_shipping() {
-        let _ = pretty_env_logger::try_init();
+        let _ = setup_logging_or_tracing();
 
         // initial state.
         let on_display = OnDisplay::new();
@@ -526,10 +588,16 @@ mod test {
         let mut feeding_interval = time::interval(Duration::from_millis(100));
         feeding_interval.tick().await;
 
+        #[cfg(feature = "tracing")]
+        let span = info_span!("test_span");
+
         let mut state_machine_runner = TimeBoundStateMachineRunner::new(
             "Order".into(),
             Box::new(on_display),
             Duration::from_secs(5),
+            // Add Span when feature 'tracing' is enabled
+            #[cfg(feature = "tracing")]
+            span,
         );
 
         let (state_machine_tx, mut state_machine_rx) = mpsc::unbounded_channel();
@@ -559,7 +627,7 @@ mod test {
 
     #[tokio::test]
     async fn order_canceled_state_machine_timeouts() {
-        let _ = pretty_env_logger::try_init();
+        let _ = setup_logging_or_tracing();
 
         // initial state.
         let on_display = OnDisplay::new();
@@ -573,10 +641,16 @@ mod test {
         let mut feeding_interval = time::interval(Duration::from_millis(100));
         feeding_interval.tick().await;
 
+        #[cfg(feature = "tracing")]
+        let span = info_span!("test_span");
+
         let mut state_machine_runner = TimeBoundStateMachineRunner::new(
             "Order".into(),
             Box::new(on_display),
             Duration::from_secs(5),
+            // Add Span when feature 'tracing' is enabled
+            #[cfg(feature = "tracing")]
+            span,
         );
 
         let (state_machine_tx, mut state_machine_rx) = mpsc::unbounded_channel();
@@ -611,7 +685,7 @@ mod test {
 
     #[tokio::test]
     async fn faulty_state_leads_to_state_machine_termination() {
-        let _ = pretty_env_logger::try_init();
+        let _ = setup_logging_or_tracing();
 
         // initial state.
         let on_display = OnDisplay::new();
@@ -621,10 +695,16 @@ mod test {
         let mut feeding_interval = time::interval(Duration::from_millis(100));
         feeding_interval.tick().await;
 
+        #[cfg(feature = "tracing")]
+        let span = info_span!("test_span");
+
         let mut state_machine_runner = TimeBoundStateMachineRunner::new(
             "Order".into(),
             Box::new(on_display),
             Duration::from_secs(5),
+            // Add Span when feature 'tracing' is enabled
+            #[cfg(feature = "tracing")]
+            span,
         );
 
         let (state_machine_tx, mut state_machine_rx) = mpsc::unbounded_channel();

@@ -146,7 +146,8 @@ mod test {
 
         fn _deliver(&mut self, message: ()) -> Result<(), String> {
             if self.messages.len() < 2 {
-                Ok(self.messages.push(message))
+                self.messages.push(message);
+                Ok(())
             } else {
                 Err("I only need 2 messages".to_string())
             }
