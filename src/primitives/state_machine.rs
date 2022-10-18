@@ -23,13 +23,7 @@ pub struct TimeBoundStateMachineRunner<Types: StateTypes> {
     span: Span,
 }
 
-impl<Types> TimeBoundStateMachineRunner<Types>
-where
-    Types: 'static + StateTypes,
-    Types::In: Send,
-    Types::Out: Send,
-    Types::Err: Send,
-{
+impl<Types: StateTypes> TimeBoundStateMachineRunner<Types> {
     pub fn new(
         id: StateMachineId,
         initial_state: BoxedState<Types>,
@@ -314,7 +308,7 @@ impl StateMachineId {
 
 /// Possible reasons for erroneous run of the state machine.
 /// This enum provides a rich context in which the state machine run.
-#[derive(Error)]
+#[derive(Error, Debug)]
 pub enum StateMachineError<Types: StateTypes> {
     #[error("{0:?}")]
     IncomingCommunication(FeedError),
