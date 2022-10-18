@@ -1,6 +1,6 @@
 [package]
 name = "oblivious_state_machine"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 authors = ["victor.ermolaev@ing.com"]
 
@@ -23,3 +23,7 @@ tracing-subscriber = "0.3.15"
 [features]
 # default = ["tracing"]
 tracing = ["dep:tracing"]
+
+[[example]]
+name = "combination"
+path = "examples/combination/main.rs"
