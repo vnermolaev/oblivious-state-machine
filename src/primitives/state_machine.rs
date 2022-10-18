@@ -308,7 +308,7 @@ where
                         #[cfg(feature = "tracing")] span: span.clone()
                     })
                     .map_err(|err| {
-                        if let Either::Messages{messages, ..} = err.0 {
+                        if let Either::Messages { messages, .. } = err.0 {
                             StateMachineDriverError::OutgoingCommunication(messages)
                         } else {
                             panic!("[BUG] Sending Either::Messages failed, but reports not being able to send other kind of a message");
@@ -778,7 +778,7 @@ mod test {
         let on_display = OnDisplay::new();
 
         // feed of un-ordered messages.
-        let mut feed = VecDeque::from(vec![Message::Verify(Verify::Address), Message::Damage]);
+        let mut feed = VecDeque::from([Message::Verify(Verify::Address), Message::Damage]);
         let mut feeding_interval = time::interval(Duration::from_millis(100));
         feeding_interval.tick().await;
 
