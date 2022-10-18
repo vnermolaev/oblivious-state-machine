@@ -103,6 +103,99 @@ pub enum Either<M, R> {
     },
 }
 
+impl<M, R> Either<M, R> {
+    pub fn map_former<U, F>(self, f: F) -> Either<U, R>
+    where
+        F: FnOnce(M) -> U,
+    {
+        match self {
+            Self::Messages {
+                from,
+                messages,
+                #[cfg(feature = "tracing")]
+                span,
+            } => Either::Messages {
+                from,
+                messages: f(messages),
+                #[cfg(feature = "tracing")]
+                span,
+            },
+            Self::Result {
+                from,
+                result,
+                #[cfg(feature = "tracing")]
+                span,
+            } => Either::Result {
+                from,
+                result,
+                #[cfg(feature = "tracing")]
+                span,
+            },
+        }
+    }
+
+    pub fn map_latter<U, F>(self, f: F) -> Either<M, U>
+    where
+        F: FnOnce(R) -> U,
+    {
+        match self {
+            Self::Messages {
+                from,
+                messages,
+                #[cfg(feature = "tracing")]
+                span,
+            } => Either::Messages {
+                from,
+                messages,
+                #[cfg(feature = "tracing")]
+                span,
+            },
+            Self::Result {
+                from,
+                result,
+                #[cfg(feature = "tracing")]
+                span,
+            } => Either::Result {
+                from,
+                result: f(result),
+                #[cfg(feature = "tracing")]
+                span,
+            },
+        }
+    }
+
+    pub fn map<M1, R1, F, G>(self, f: F, g: G) -> Either<M1, R1>
+    where
+        F: FnOnce(M) -> M1,
+        G: FnOnce(R) -> R1,
+    {
+        match self {
+            Self::Messages {
+                from,
+                messages,
+                #[cfg(feature = "tracing")]
+                span,
+            } => Either::Messages {
+                from,
+                messages: f(messages),
+                #[cfg(feature = "tracing")]
+                span,
+            },
+            Self::Result {
+                from,
+                result,
+                #[cfg(feature = "tracing")]
+                span,
+            } => Either::Result {
+                from,
+                result: g(result),
+                #[cfg(feature = "tracing")]
+                span,
+            },
+        }
+    }
+}
+
 pub type TimeBoundStateMachineResult<T> = Result<BoxedState<T>, StateMachineError<T>>;
 
 /// State machine that takes an initial states and attempts to advance it until the terminal state.
