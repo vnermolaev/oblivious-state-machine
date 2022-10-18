@@ -4,7 +4,7 @@ use std::fmt::Debug;
 /// `State` is an abstraction for any internal state of a protocol.
 /// State may send out some messages at initialization and then only deliver messages in order
 /// to advance to a next state.
-pub trait State<Types: StateTypes>: Downcast {
+pub trait State<Types: StateTypes>: Downcast + Debug {
     fn desc(&self) -> String;
 
     fn initialize(&self) -> Vec<Types::Out> {
@@ -58,10 +58,10 @@ where
 }
 // =====================
 
-pub trait StateTypes {
-    type In: Debug;
-    type Out: Debug;
-    type Err: Debug;
+pub trait StateTypes: 'static {
+    type In: Debug + Send;
+    type Out: Debug + Send;
+    type Err: Debug + Send;
 }
 
 #[derive(Debug)]

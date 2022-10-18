@@ -23,13 +23,7 @@ pub struct TimeBoundStateMachineRunner<Types: StateTypes> {
     span: Span,
 }
 
-impl<Types> TimeBoundStateMachineRunner<Types>
-where
-    Types: 'static + StateTypes,
-    Types::In: Send,
-    Types::Out: Send,
-    Types::Err: Send,
-{
+impl<Types: StateTypes> TimeBoundStateMachineRunner<Types> {
     pub fn new(
         id: StateMachineId,
         initial_state: BoxedState<Types>,
@@ -107,6 +101,99 @@ pub enum Either<M, R> {
         #[cfg(feature = "tracing")]
         span: Span,
     },
+}
+
+impl<M, R> Either<M, R> {
+    pub fn map_former<U, F>(self, f: F) -> Either<U, R>
+    where
+        F: FnOnce(M) -> U,
+    {
+        match self {
+            Self::Messages {
+                from,
+                messages,
+                #[cfg(feature = "tracing")]
+                span,
+            } => Either::Messages {
+                from,
+                messages: f(messages),
+                #[cfg(feature = "tracing")]
+                span,
+            },
+            Self::Result {
+                from,
+                result,
+                #[cfg(feature = "tracing")]
+                span,
+            } => Either::Result {
+                from,
+                result,
+                #[cfg(feature = "tracing")]
+                span,
+            },
+        }
+    }
+
+    pub fn map_latter<U, F>(self, f: F) -> Either<M, U>
+    where
+        F: FnOnce(R) -> U,
+    {
+        match self {
+            Self::Messages {
+                from,
+                messages,
+                #[cfg(feature = "tracing")]
+                span,
+            } => Either::Messages {
+                from,
+                messages,
+                #[cfg(feature = "tracing")]
+                span,
+            },
+            Self::Result {
+                from,
+                result,
+                #[cfg(feature = "tracing")]
+                span,
+            } => Either::Result {
+                from,
+                result: f(result),
+                #[cfg(feature = "tracing")]
+                span,
+            },
+        }
+    }
+
+    pub fn map<M1, R1, F, G>(self, f: F, g: G) -> Either<M1, R1>
+    where
+        F: FnOnce(M) -> M1,
+        G: FnOnce(R) -> R1,
+    {
+        match self {
+            Self::Messages {
+                from,
+                messages,
+                #[cfg(feature = "tracing")]
+                span,
+            } => Either::Messages {
+                from,
+                messages: f(messages),
+                #[cfg(feature = "tracing")]
+                span,
+            },
+            Self::Result {
+                from,
+                result,
+                #[cfg(feature = "tracing")]
+                span,
+            } => Either::Result {
+                from,
+                result: g(result),
+                #[cfg(feature = "tracing")]
+                span,
+            },
+        }
+    }
 }
 
 pub type TimeBoundStateMachineResult<T> = Result<BoxedState<T>, StateMachineError<T>>;
@@ -221,7 +308,7 @@ where
                         #[cfg(feature = "tracing")] span: span.clone()
                     })
                     .map_err(|err| {
-                        if let Either::Messages{messages, ..} = err.0 {
+                        if let Either::Messages { messages, .. } = err.0 {
                             StateMachineDriverError::OutgoingCommunication(messages)
                         } else {
                             panic!("[BUG] Sending Either::Messages failed, but reports not being able to send other kind of a message");
@@ -314,7 +401,7 @@ impl StateMachineId {
 
 /// Possible reasons for erroneous run of the state machine.
 /// This enum provides a rich context in which the state machine run.
-#[derive(Error)]
+#[derive(Error, Debug)]
 pub enum StateMachineError<Types: StateTypes> {
     #[error("{0:?}")]
     IncomingCommunication(FeedError),
@@ -691,7 +778,7 @@ mod test {
         let on_display = OnDisplay::new();
 
         // feed of un-ordered messages.
-        let mut feed = VecDeque::from(vec![Message::Verify(Verify::Address), Message::Damage]);
+        let mut feed = VecDeque::from([Message::Verify(Verify::Address), Message::Damage]);
         let mut feeding_interval = time::interval(Duration::from_millis(100));
         feeding_interval.tick().await;
 
