@@ -166,8 +166,8 @@ where
                 }
                 other @ Some(_) => other.map(|either| {
                     either
-                        .map_former(CombinedOut::SM0)
-                        .map_latter(|res| match res {
+                        .map_messages(CombinedOut::SM0)
+                        .map_result(|res| match res {
                             // map_err?
                             Ok(_) => unreachable!("This case has been handled outside"),
                             Err(err) => Err(CombinedError::SM0(err)),
@@ -215,8 +215,8 @@ where
                 }
                 other @ Some(_) => other.map(|either| {
                     either
-                        .map_former(CombinedOut::SM1)
-                        .map_latter(|res| match res {
+                        .map_messages(CombinedOut::SM1)
+                        .map_result(|res| match res {
                             // map_err?
                             Ok(_) => unreachable!("This case has been handled outside"),
                             Err(err) => Err(CombinedError::SM1(err)),
@@ -227,8 +227,8 @@ where
             Self::SM2 { ref mut rx, .. } => match rx.recv().await {
                 success @ Some(Either::Result { result: Ok(_), .. }) => success.map(|either| {
                     either
-                        .map_former(CombinedOut::SM2)
-                        .map_latter(|res| match res {
+                        .map_messages(CombinedOut::SM2)
+                        .map_result(|res| match res {
                             // map_err?
                             Ok(t) => Ok(t),
                             Err(_) => unreachable!("This case has been handled outside"),
@@ -236,8 +236,8 @@ where
                 }),
                 other @ Some(_) => other.map(|either| {
                     either
-                        .map_former(CombinedOut::SM2)
-                        .map_latter(|res| match res {
+                        .map_messages(CombinedOut::SM2)
+                        .map_result(|res| match res {
                             Ok(_) => unreachable!("This case has been handled outside"),
                             Err(err) => Err(CombinedError::SM2(err)),
                         })
