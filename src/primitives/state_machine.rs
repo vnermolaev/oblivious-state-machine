@@ -158,7 +158,7 @@ pub struct StateMachine<Types: StateTypes> {
     /// id for this state machine.
     id: StateMachineId,
 
-    /// State is wrapped into [InnerState] that also maintains a flag whether the state has been initialized.
+    /// The current state.
     state: BoxedState<Types>,
 
     /// [Feed] combining delayed messages and the external feed.
