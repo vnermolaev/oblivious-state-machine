@@ -58,9 +58,17 @@ where
 }
 // =====================
 
+/// Type bounds to use for a specific state machine.
+///
+/// All [State]s in the same state machine are required to be of the same [StateTypes].
+// It is not possible to move the `Debug + Send` type bounds of the associated types to `StateTypes`,
+// because in that case the compiler will not know that these bounds apply to the associated types.
 pub trait StateTypes: 'static {
+    /// Type of incoming messages
     type In: Debug + Send;
+    /// Type of outgoing messages
     type Out: Debug + Send;
+    /// Type of errors emitted from the state machine
     type Err: Debug + Send;
 }
 

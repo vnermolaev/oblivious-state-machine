@@ -5,6 +5,7 @@ use crate::state_machine::{
     Either, StateMachineError, StateMachineRx, TimeBoundStateMachineRunner,
 };
 use std::any::type_name;
+use std::fmt::Debug;
 use thiserror::Error;
 
 #[cfg(feature = "tracing")]
@@ -80,7 +81,7 @@ impl<T0, T1, T2> Combined<T0, T1, T2>
 where
     T0: StateTypes,
     T1: StateTypes,
-    T2: StateTypes,
+    T2: StateTypes + Debug,
 {
     pub fn new(
         initial_state: BoxedState<T0>,
@@ -129,14 +130,14 @@ where
                 // and not returned from this function.
                 Some(Either::Result {
                     from,
-                    result: Ok(t),
+                    result: Ok(final_state),
                     #[cfg(feature = "tracing")]
                     span,
                 }) => {
                     // Current state machine succeeded with an Ok result,
                     // use its result to construct a state for the next sm.
-                    let s = match converter(t) {
-                        Ok(s) => s,
+                    let initial_state = match converter(final_state) {
+                        Ok(initial_state) => initial_state,
                         Err(err) => {
                             return Some(Either::Result {
                                 from,
@@ -148,7 +149,7 @@ where
                     };
                     let (sm, rx) = start_new_sm(
                         type_name::<Self>().into(),
-                        s,
+                        initial_state,
                         t1_t2.time_budget,
                         #[cfg(feature = "tracing")]
                         span,
@@ -165,13 +166,11 @@ where
                     None
                 }
                 other @ Some(_) => other.map(|either| {
-                    either
-                        .map_former(CombinedOut::SM0)
-                        .map_latter(|res| match res {
-                            // map_err?
-                            Ok(_) => unreachable!("This case has been handled outside"),
-                            Err(err) => Err(CombinedError::SM0(err)),
-                        })
+                    either.map_messages(CombinedOut::SM0).map_result(|res| {
+                        Err(CombinedError::SM0(
+                            res.expect_err("This case has been handled outside"),
+                        ))
+                    })
                 }),
                 None => None,
             },
@@ -186,14 +185,14 @@ where
                 // and not returned from this function.
                 Some(Either::Result {
                     from,
-                    result: Ok(t),
+                    result: Ok(final_state),
                     #[cfg(feature = "tracing")]
                     span,
                 }) => {
                     // Current state machine succeeded with an Ok result,
                     // use its result to construct a state for the next sm.
-                    let s = match converter(t) {
-                        Ok(s) => s,
+                    let initial_state = match converter(final_state) {
+                        Ok(initial_state) => initial_state,
                         Err(err) => {
                             return Some(Either::Result {
                                 from,
@@ -205,7 +204,7 @@ where
                     };
                     let (sm, rx) = start_new_sm(
                         type_name::<Self>().into(),
-                        s,
+                        initial_state,
                         t2.time_budget,
                         #[cfg(feature = "tracing")]
                         span,
@@ -214,33 +213,26 @@ where
                     None
                 }
                 other @ Some(_) => other.map(|either| {
-                    either
-                        .map_former(CombinedOut::SM1)
-                        .map_latter(|res| match res {
-                            // map_err?
-                            Ok(_) => unreachable!("This case has been handled outside"),
-                            Err(err) => Err(CombinedError::SM1(err)),
-                        })
+                    either.map_messages(CombinedOut::SM1).map_result(|res| {
+                        Err(CombinedError::SM1(
+                            res.expect_err("This case has been handled outside"),
+                        ))
+                    })
                 }),
                 None => None,
             },
             Self::SM2 { ref mut rx, .. } => match rx.recv().await {
                 success @ Some(Either::Result { result: Ok(_), .. }) => success.map(|either| {
                     either
-                        .map_former(CombinedOut::SM2)
-                        .map_latter(|res| match res {
-                            // map_err?
-                            Ok(t) => Ok(t),
-                            Err(_) => unreachable!("This case has been handled outside"),
-                        })
+                        .map_messages(CombinedOut::SM2)
+                        .map_result(|res| Ok(res.expect("This case has been handled outside")))
                 }),
                 other @ Some(_) => other.map(|either| {
-                    either
-                        .map_former(CombinedOut::SM2)
-                        .map_latter(|res| match res {
-                            Ok(_) => unreachable!("This case has been handled outside"),
-                            Err(err) => Err(CombinedError::SM2(err)),
-                        })
+                    either.map_messages(CombinedOut::SM2).map_result(|res| {
+                        Err(CombinedError::SM2(
+                            res.expect_err("This case has been handled outside"),
+                        ))
+                    })
                 }),
                 None => None,
             },

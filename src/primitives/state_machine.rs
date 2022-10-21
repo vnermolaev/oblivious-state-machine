@@ -1,6 +1,7 @@
 use crate::feed::{Feed, FeedError};
 use crate::state::{BoxedState, DeliveryStatus, StateTypes, Transition};
 use serde::{Deserialize, Serialize};
+use std::convert::identity;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -104,64 +105,18 @@ pub enum Either<M, R> {
 }
 
 impl<M, R> Either<M, R> {
-    pub fn map_former<U, F>(self, f: F) -> Either<U, R>
+    pub fn map_messages<U, F>(self, f: F) -> Either<U, R>
     where
         F: FnOnce(M) -> U,
     {
-        match self {
-            Self::Messages {
-                from,
-                messages,
-                #[cfg(feature = "tracing")]
-                span,
-            } => Either::Messages {
-                from,
-                messages: f(messages),
-                #[cfg(feature = "tracing")]
-                span,
-            },
-            Self::Result {
-                from,
-                result,
-                #[cfg(feature = "tracing")]
-                span,
-            } => Either::Result {
-                from,
-                result,
-                #[cfg(feature = "tracing")]
-                span,
-            },
-        }
+        self.map(f, identity)
     }
 
-    pub fn map_latter<U, F>(self, f: F) -> Either<M, U>
+    pub fn map_result<U, F>(self, f: F) -> Either<M, U>
     where
         F: FnOnce(R) -> U,
     {
-        match self {
-            Self::Messages {
-                from,
-                messages,
-                #[cfg(feature = "tracing")]
-                span,
-            } => Either::Messages {
-                from,
-                messages,
-                #[cfg(feature = "tracing")]
-                span,
-            },
-            Self::Result {
-                from,
-                result,
-                #[cfg(feature = "tracing")]
-                span,
-            } => Either::Result {
-                from,
-                result: f(result),
-                #[cfg(feature = "tracing")]
-                span,
-            },
-        }
+        self.map(identity, f)
     }
 
     pub fn map<M1, R1, F, G>(self, f: F, g: G) -> Either<M1, R1>
@@ -203,7 +158,7 @@ pub struct StateMachine<Types: StateTypes> {
     /// id for this state machine.
     id: StateMachineId,
 
-    /// State is wrapped into [InnerState] that also maintains a flag whether the state has been initialized.
+    /// The current state.
     state: BoxedState<Types>,
 
     /// [Feed] combining delayed messages and the external feed.
