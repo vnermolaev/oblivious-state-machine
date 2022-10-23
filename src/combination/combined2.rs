@@ -28,6 +28,7 @@ where
     },
 }
 
+#[derive(Debug)]
 pub enum CombinedOut<T0, T1>
 where
     T0: StateTypes,
@@ -53,6 +54,7 @@ where
 
 pub type CombinedResult<T0, T1> = Result<BoxedState<T1>, CombinedError<T0, T1>>;
 
+#[derive(Debug)]
 pub enum CombinedIn<T0, T1>
 where
     T0: StateTypes,
