@@ -46,17 +46,34 @@ where
         let handle = StateMachineHandle { tx };
 
         (
-            Self {
+            Self::new_with_handle(
                 id,
-                state: initial_state,
-                feed: Feed::new(rx),
+                initial_state,
                 messages_tx,
-
+                rx,
                 #[cfg(feature = "tracing")]
                 span,
-            },
+            ),
             handle,
         )
+    }
+
+    pub fn new_with_handle(
+        id: StateMachineId,
+        initial_state: BoxedState<Types>,
+        messages_tx: mpsc::UnboundedSender<Messages<Types::Out>>,
+        handle_rx: mpsc::UnboundedReceiver<Types::In>,
+        #[cfg(feature = "tracing")] span: Span,
+    ) -> Self {
+        Self {
+            id,
+            state: initial_state,
+            feed: Feed::new(handle_rx),
+            messages_tx,
+
+            #[cfg(feature = "tracing")]
+            span,
+        }
     }
 
     pub async fn run_with_timeout(mut self, time_budget: Duration) -> StateMachineResult<Types> {
@@ -174,8 +191,15 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct StateMachineHandle<Types: StateTypes> {
     tx: mpsc::UnboundedSender<Types::In>,
+}
+
+impl<Types: StateTypes> From<mpsc::UnboundedSender<Types::In>> for StateMachineHandle<Types> {
+    fn from(tx: mpsc::UnboundedSender<Types::In>) -> Self {
+        Self { tx }
+    }
 }
 
 impl<Types: StateTypes> StateMachineHandle<Types> {
