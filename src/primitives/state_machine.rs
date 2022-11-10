@@ -1,7 +1,6 @@
 use crate::feed::{Feed, FeedError};
 use crate::state::{BoxedState, DeliveryStatus, StateTypes, Transition};
 use serde::{Deserialize, Serialize};
-use std::convert::identity;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -9,149 +8,6 @@ use tokio::time;
 
 #[cfg(feature = "tracing")]
 use tracing::Span;
-
-/// A time-bound state machine runner.
-/// Runs a state machine for at most as long as `[time_budget_ms]` milliseconds.
-/// It is a convenient interface to deliver and receive messages from the inner state machine.
-pub struct TimeBoundStateMachineRunner<Types: StateTypes> {
-    pub id: StateMachineId,
-    initial_state: Option<BoxedState<Types>>,
-    feed: Option<mpsc::UnboundedReceiver<Types::In>>,
-    feeder: mpsc::UnboundedSender<Types::In>,
-    time_budget: Duration,
-
-    #[cfg(feature = "tracing")]
-    span: Span,
-}
-
-impl<Types: StateTypes> TimeBoundStateMachineRunner<Types> {
-    pub fn new(
-        id: StateMachineId,
-        initial_state: BoxedState<Types>,
-        time_budget: Duration,
-
-        #[cfg(feature = "tracing")] span: Span,
-    ) -> Self {
-        log::debug!(
-            "[{id:?}] Time-bound state machine runner for state machine [{id:?}] is initializing with budget {:?}",
-            time_budget
-        );
-
-        let (feeder, feed) = mpsc::unbounded_channel();
-
-        Self {
-            id,
-            initial_state: Some(initial_state),
-            feed: Some(feed),
-            feeder,
-            time_budget,
-
-            #[cfg(feature = "tracing")]
-            span,
-        }
-    }
-
-    pub fn run(&mut self, state_machine_sink: StateMachineTx<Types>) {
-        // Prepare state machine.
-        let initial_state = self
-            .initial_state
-            .take()
-            .expect("An initial state is expected");
-
-        let feed = self
-            .feed
-            .take()
-            .expect("A channel for state machine communication is expected");
-
-        // State machine is ready.
-        let state_machine = StateMachine::new(
-            self.id.clone(),
-            initial_state,
-            feed,
-            state_machine_sink,
-            // Add Span when feature 'tracing' is enabled
-            #[cfg(feature = "tracing")]
-            self.span.clone(),
-        );
-
-        let time_budget = self.time_budget;
-
-        tokio::spawn(async move {
-            state_machine.run_with_timeout(time_budget).await;
-        });
-    }
-
-    /// Attempts a message delivery, if unsuccessful, returns message back as Err(message).
-    pub fn deliver(&self, message: Types::In) -> Result<(), Types::In> {
-        self.feeder.send(message).map_err(|err| err.0)
-    }
-}
-
-pub enum Either<M, R> {
-    Messages {
-        from: StateMachineId,
-        messages: M,
-
-        #[cfg(feature = "tracing")]
-        span: Span,
-    },
-    Result {
-        from: StateMachineId,
-        result: R,
-
-        #[cfg(feature = "tracing")]
-        span: Span,
-    },
-}
-
-impl<M, R> Either<M, R> {
-    pub fn map_messages<U, F>(self, f: F) -> Either<U, R>
-    where
-        F: FnOnce(M) -> U,
-    {
-        self.map(f, identity)
-    }
-
-    pub fn map_result<U, F>(self, f: F) -> Either<M, U>
-    where
-        F: FnOnce(R) -> U,
-    {
-        self.map(identity, f)
-    }
-
-    pub fn map<M1, R1, F, G>(self, f: F, g: G) -> Either<M1, R1>
-    where
-        F: FnOnce(M) -> M1,
-        G: FnOnce(R) -> R1,
-    {
-        match self {
-            Self::Messages {
-                from,
-                messages,
-                #[cfg(feature = "tracing")]
-                span,
-            } => Either::Messages {
-                from,
-                messages: f(messages),
-                #[cfg(feature = "tracing")]
-                span,
-            },
-            Self::Result {
-                from,
-                result,
-                #[cfg(feature = "tracing")]
-                span,
-            } => Either::Result {
-                from,
-                result: g(result),
-                #[cfg(feature = "tracing")]
-                span,
-            },
-        }
-    }
-}
-
-pub type TimeBoundStateMachineResult<T> = Result<BoxedState<T>, StateMachineError<T>>;
 
 /// State machine that takes an initial states and attempts to advance it until the terminal state.
 pub struct StateMachine<Types: StateTypes> {
@@ -164,8 +20,8 @@ pub struct StateMachine<Types: StateTypes> {
     /// [Feed] combining delayed messages and the external feed.
     feed: Feed<Types::In>,
 
-    /// Channel to report outgoing messages and the result.
-    state_machine_tx: StateMachineTx<Types>,
+    /// Channel to report outgoing messages.
+    messages_tx: mpsc::UnboundedSender<Messages<Types::Out>>,
 
     #[cfg(feature = "tracing")]
     span: Span,
@@ -174,34 +30,60 @@ pub struct StateMachine<Types: StateTypes> {
 impl<Types> StateMachine<Types>
 where
     Types: 'static + StateTypes,
-    Types::In: Send,
 {
+    /// Create a new [StateMachine] and a corresponding [StateMachineHandle].
     pub fn new(
         id: StateMachineId,
         initial_state: BoxedState<Types>,
-        feed: mpsc::UnboundedReceiver<Types::In>,
-        state_machine_tx: StateMachineTx<Types>,
-
+        messages_tx: mpsc::UnboundedSender<Messages<Types::Out>>,
         #[cfg(feature = "tracing")] span: Span,
-    ) -> Self {
-        log::debug!(
+    ) -> (Self, StateMachineHandle<Types>) {
+        log::trace!(
             "[{id:?}] State machine has been initialized at <{}>",
             initial_state.desc()
         );
 
+        let (tx, rx) = mpsc::unbounded_channel();
+        let handle = StateMachineHandle { tx };
+
+        (
+            Self::new_with_handle(
+                id,
+                initial_state,
+                messages_tx,
+                rx,
+                #[cfg(feature = "tracing")]
+                span,
+            ),
+            handle,
+        )
+    }
+
+    /// Create a new [StateMachine] and with a receiver channel corresponding to a given [StateMachineHandle].
+    /// This method can be useful when the receiver channel must be known before a [StateMachine] can be constructed,
+    /// e.g., when state machines are executed one after another, such that the result of the former [StateMachine]
+    /// is used for construction of an initial state for the latter [StateMachine].
+    pub fn new_with_handle(
+        id: StateMachineId,
+        initial_state: BoxedState<Types>,
+        messages_tx: mpsc::UnboundedSender<Messages<Types::Out>>,
+        handle_rx: mpsc::UnboundedReceiver<Types::In>,
+        #[cfg(feature = "tracing")] span: Span,
+    ) -> Self {
         Self {
             id,
             state: initial_state,
-            feed: Feed::new(feed),
-            state_machine_tx,
+            feed: Feed::new(handle_rx),
+            messages_tx,
 
             #[cfg(feature = "tracing")]
             span,
         }
     }
 
-    pub async fn run_with_timeout(mut self, time_budget: Duration) {
-        let result = match time::timeout(time_budget, self.run()).await {
+    /// Attempt to execute this [StateMachine] within a given time limit.
+    pub async fn run_with_timeout(mut self, time_budget: Duration) -> StateMachineResult<Types> {
+        let value = match time::timeout(time_budget, self.run()).await {
             Ok(Ok(())) => Ok(self.state),
             Ok(Err(StateMachineDriverError::StateError(error))) => Err(StateMachineError::State {
                 error,
@@ -221,24 +103,22 @@ where
             }),
         };
 
-        self.state_machine_tx
-            .send(Either::Result {
-                from: self.id.clone(),
-                result,
-
-                #[cfg(feature = "tracing")]
-                span: self.span,
-            })
-            .unwrap_or_else(|_| panic!("[{:?}] State machine result receiver dropped", self.id));
+        StateMachineResult {
+            value,
+            #[cfg(feature = "tracing")]
+            span: self.span,
+        }
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument[parent = &self.span, skip_all])]
+    /// Executes this [StateMachine] regardless of time. Publicly inaccessible,
+    /// if no time constraints are imposed on execution, use [run_with_timeout] with [Duration::MAX].
     async fn run(&mut self) -> Result<(), StateMachineDriverError<Types>> {
         let Self {
             id,
             ref mut state,
             ref mut feed,
-            ref mut state_machine_tx,
+            ref mut messages_tx,
 
             #[cfg(feature = "tracing")]
             span,
@@ -251,31 +131,24 @@ where
         loop {
             // Try to Initialize the state.
             if !is_state_initialized {
-                log::debug!("[{:?}] Initializing", id);
+                log::trace!("[{:?}] Initializing", id);
 
                 let messages = state.initialize();
 
-                state_machine_tx
-                    .send(Either::Messages{
+                messages_tx
+                    .send(Messages {
                         from: id.clone(),
-                        messages,
-
-                        #[cfg(feature = "tracing")] span: span.clone()
+                        value: messages,
+                        #[cfg(feature = "tracing")]
+                        span: span.clone(),
                     })
-                    .map_err(|err| {
-                        if let Either::Messages { messages, .. } = err.0 {
-                            StateMachineDriverError::OutgoingCommunication(messages)
-                        } else {
-                            panic!("[BUG] Sending Either::Messages failed, but reports not being able to send other kind of a message");
-                        }
-
-                    })?;
+                    .map_err(|err| StateMachineDriverError::OutgoingCommunication(err.0.value))?;
 
                 is_state_initialized = true;
             }
 
             // Attempt to advance.
-            log::debug!("[{id:?}] State advance attempt");
+            log::trace!("[{id:?}] State advance attempt");
             let advanced = state.advance().map_err(|err| {
                 log::debug!("[{id:?}] State advance attempt failed with: {err:?}");
                 StateMachineDriverError::StateError(err)
@@ -283,7 +156,7 @@ where
 
             match advanced {
                 Transition::Same => {
-                    log::debug!("[{id:?}] State requires more input");
+                    log::trace!("[{id:?}] State requires more input");
 
                     // No advancement. Try to deliver a message.
                     let message = feed
@@ -293,10 +166,10 @@ where
 
                     match state.deliver(message) {
                         DeliveryStatus::Delivered => {
-                            log::debug!("[{id:?}] Message has been delivered");
+                            log::trace!("[{id:?}] Message has been delivered");
                         }
                         DeliveryStatus::Unexpected(message) => {
-                            log::debug!("[{id:?}] Unexpected message. Storing for future attempts");
+                            log::trace!("[{id:?}] Unexpected message. Storing for future attempts");
                             feed.delay(message);
                         }
                         DeliveryStatus::Error(err) => {
@@ -326,12 +199,43 @@ where
     }
 }
 
-pub type StateMachineTx<Types> = mpsc::UnboundedSender<
-    Either<Vec<<Types as StateTypes>::Out>, TimeBoundStateMachineResult<Types>>,
->;
-pub type StateMachineRx<Types> = mpsc::UnboundedReceiver<
-    Either<Vec<<Types as StateTypes>::Out>, TimeBoundStateMachineResult<Types>>,
->;
+#[derive(Debug)]
+/// [StateMachineHandle] is a synchronous interface to communicate message to a corresponding [StateMachine].
+pub struct StateMachineHandle<Types: StateTypes> {
+    tx: mpsc::UnboundedSender<Types::In>,
+}
+
+impl<Types: StateTypes> From<mpsc::UnboundedSender<Types::In>> for StateMachineHandle<Types> {
+    fn from(tx: mpsc::UnboundedSender<Types::In>) -> Self {
+        Self { tx }
+    }
+}
+
+impl<Types: StateTypes> StateMachineHandle<Types> {
+    /// Attempts a message delivery, if unsuccessful, returns message back as Err(message).
+    pub fn deliver(&self, message: Types::In) -> Result<(), Types::In> {
+        self.tx.send(message).map_err(|err| err.0)
+    }
+}
+
+/// Messages emitted from a [StateMachine] are enriched with some contextual information.
+pub struct Messages<T> {
+    /// Id of the [StateMachine] emitting the messages.
+    pub from: StateMachineId,
+    /// Actual messages.
+    pub value: Vec<T>,
+
+    #[cfg(feature = "tracing")]
+    pub span: Span,
+}
+
+/// Enriched result of the [StateMachine] execution.
+pub struct StateMachineResult<T: StateTypes> {
+    pub value: Result<BoxedState<T>, StateMachineError<T>>,
+
+    #[cfg(feature = "tracing")]
+    pub span: Span,
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct StateMachineId(String);
@@ -388,14 +292,12 @@ enum StateMachineDriverError<Types: StateTypes> {
 #[cfg(test)]
 mod test {
     use crate::state::{DeliveryStatus, State, StateTypes, Transition};
-    use crate::state_machine::{
-        Either, StateMachineError, TimeBoundStateMachineResult, TimeBoundStateMachineRunner,
-    };
+    use crate::state_machine::{StateMachine, StateMachineError, StateMachineResult};
     use pretty_env_logger;
     use std::collections::VecDeque;
     use std::time::Duration;
-    use tokio::sync::mpsc;
-    use tokio::{select, time};
+    use tokio::sync::{mpsc, oneshot};
+    use tokio::time;
 
     #[cfg(feature = "tracing")]
     use tracing::info_span;
@@ -633,33 +535,39 @@ mod test {
         #[cfg(feature = "tracing")]
         let span = info_span!("test_span");
 
-        let mut state_machine_runner = TimeBoundStateMachineRunner::new(
+        let (messages_tx, _messages_rx) = mpsc::unbounded_channel();
+        let (state_machine, state_machine_handle) = StateMachine::new(
             "Order".into(),
             Box::new(on_display),
-            Duration::from_secs(5),
+            messages_tx,
             // Add Span when feature 'tracing' is enabled
             #[cfg(feature = "tracing")]
             span,
         );
 
-        let (state_machine_tx, mut state_machine_rx) = mpsc::unbounded_channel();
-        state_machine_runner.run(state_machine_tx);
+        let (tx, mut rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = state_machine.run_with_timeout(Duration::from_secs(5)).await;
+            tx.send(result).unwrap_or_else(|_| panic!("Must send"));
+        });
 
-        let res: TimeBoundStateMachineResult<Types> = loop {
-            select! {
-                Some(Either::Result{ result, ..} ) = state_machine_rx.recv() => {
-                    break result;
+        let res: StateMachineResult<Types> = loop {
+            tokio::select! {
+                result = &mut rx => {
+                    break result.expect("Must receive");
                 }
                 _ = feeding_interval.tick() => {
                     // feed a message if present.
                     if let Some(msg) = feed.pop_front() {
-                        let _ = state_machine_runner.deliver(msg);
+                        let _ = state_machine_handle.deliver(msg);
                     }
                 }
             }
         };
 
-        let order = res.unwrap_or_else(|_| panic!("State machine did not complete in time"));
+        let order = res
+            .value
+            .unwrap_or_else(|_| panic!("State machine did not complete in time"));
         assert!(order.is::<Shipped>());
 
         let _shipped = order
@@ -686,34 +594,38 @@ mod test {
         #[cfg(feature = "tracing")]
         let span = info_span!("test_span");
 
-        let mut state_machine_runner = TimeBoundStateMachineRunner::new(
+        let (messages_tx, _messages_rx) = mpsc::unbounded_channel();
+        let (state_machine, state_machine_handle) = StateMachine::new(
             "Order".into(),
             Box::new(on_display),
-            Duration::from_secs(5),
+            messages_tx,
             // Add Span when feature 'tracing' is enabled
             #[cfg(feature = "tracing")]
             span,
         );
 
-        let (state_machine_tx, mut state_machine_rx) = mpsc::unbounded_channel();
-        state_machine_runner.run(state_machine_tx);
+        let (tx, mut rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = state_machine.run_with_timeout(Duration::from_secs(1)).await;
+            tx.send(result).unwrap_or_else(|_| panic!("Must send"));
+        });
 
-        let res: TimeBoundStateMachineResult<Types> = loop {
-            select! {
-                Some(Either::Result{result, ..}) =  state_machine_rx.recv() => {
-                    break result;
+        let res: StateMachineResult<Types> = loop {
+            tokio::select! {
+                result = &mut rx => {
+                    break result.expect("Must receive");
                 }
                 _ = feeding_interval.tick() => {
                     // feed a message if present.
                     if let Some(msg) = feed.pop_front() {
-                        let _ = state_machine_runner.deliver(msg);
+                        let _ = state_machine_handle.deliver(msg);
                     }
                 }
             }
         };
 
-        match res {
-            Ok(_) => panic!("TimeMachine should not have completed"),
+        match res.value {
+            Ok(_) => panic!("StateMachine should not have completed"),
             Err(StateMachineError::Timeout { state: order, .. }) => {
                 assert!(order.is::<OnDisplay>())
             }
@@ -722,8 +634,6 @@ mod test {
             }
         }
     }
-
-    // TODO abstract away the setup with the artificial feed.
 
     #[tokio::test]
     async fn faulty_state_leads_to_state_machine_termination() {
@@ -740,33 +650,37 @@ mod test {
         #[cfg(feature = "tracing")]
         let span = info_span!("test_span");
 
-        let mut state_machine_runner = TimeBoundStateMachineRunner::new(
+        let (messages_tx, _messages_rx) = mpsc::unbounded_channel();
+        let (state_machine, state_machine_handle) = StateMachine::new(
             "Order".into(),
             Box::new(on_display),
-            Duration::from_secs(5),
+            messages_tx,
             // Add Span when feature 'tracing' is enabled
             #[cfg(feature = "tracing")]
             span,
         );
 
-        let (state_machine_tx, mut state_machine_rx) = mpsc::unbounded_channel();
-        state_machine_runner.run(state_machine_tx);
+        let (tx, mut rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = state_machine.run_with_timeout(Duration::from_secs(5)).await;
+            tx.send(result).unwrap_or_else(|_| panic!("Must send"));
+        });
 
-        let res: TimeBoundStateMachineResult<Types> = loop {
-            select! {
-                Some(Either::Result{result, ..}) = state_machine_rx.recv() => {
-                    break result;
+        let res: StateMachineResult<Types> = loop {
+            tokio::select! {
+                result = &mut rx => {
+                    break result.expect("Must receive");
                 }
                 _ = feeding_interval.tick() => {
                     // feed a message if present.
                     if let Some(msg) = feed.pop_front() {
-                        let _ = state_machine_runner.deliver(msg);
+                        let _ = state_machine_handle.deliver(msg);
                     }
                 }
             }
         };
 
-        match res {
+        match res.value {
             Ok(_) => panic!("TimeMachine should not have completed"),
             Err(StateMachineError::Timeout { state: order, .. }) => {
                 assert!(order.is::<OnDisplay>())
