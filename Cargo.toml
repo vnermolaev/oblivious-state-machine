@@ -1,8 +1,11 @@
 [package]
 name = "oblivious_state_machine"
+description = "This crate defines an abstraction level to conveniently describe state machines."
 version = "0.6.0"
 edition = "2021"
 authors = ["victor.ermolaev@ing.com"]
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/vnermolaev/oblivious-state-machine"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
