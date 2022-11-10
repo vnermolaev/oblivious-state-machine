@@ -31,6 +31,7 @@ impl<Types> StateMachine<Types>
 where
     Types: 'static + StateTypes,
 {
+    /// Create a new [StateMachine] and a corresponding [StateMachineHandle].
     pub fn new(
         id: StateMachineId,
         initial_state: BoxedState<Types>,
@@ -58,6 +59,10 @@ where
         )
     }
 
+    /// Create a new [StateMachine] and with a receiver channel corresponding to a given [StateMachineHandle].
+    /// This method can be useful when the receiver channel must be known before a [StateMachine] can be constructed,
+    /// e.g., when state machines are executed one after another, such that the result of the former [StateMachine]
+    /// is used for construction of an initial state for the latter [StateMachine].
     pub fn new_with_handle(
         id: StateMachineId,
         initial_state: BoxedState<Types>,
@@ -76,6 +81,7 @@ where
         }
     }
 
+    /// Attempt to execute this [StateMachine] within a given time limit.
     pub async fn run_with_timeout(mut self, time_budget: Duration) -> StateMachineResult<Types> {
         let value = match time::timeout(time_budget, self.run()).await {
             Ok(Ok(())) => Ok(self.state),
@@ -105,6 +111,8 @@ where
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument[parent = &self.span, skip_all])]
+    /// Executes this [StateMachine] regardless of time. Publicly inaccessible,
+    /// if no time constraints are imposed on execution, use [run_with_timeout] with [Duration::MAX].
     async fn run(&mut self) -> Result<(), StateMachineDriverError<Types>> {
         let Self {
             id,
@@ -140,7 +148,7 @@ where
             }
 
             // Attempt to advance.
-            log::debug!("[{id:?}] State advance attempt");
+            log::trace!("[{id:?}] State advance attempt");
             let advanced = state.advance().map_err(|err| {
                 log::debug!("[{id:?}] State advance attempt failed with: {err:?}");
                 StateMachineDriverError::StateError(err)
@@ -148,7 +156,7 @@ where
 
             match advanced {
                 Transition::Same => {
-                    log::debug!("[{id:?}] State requires more input");
+                    log::trace!("[{id:?}] State requires more input");
 
                     // No advancement. Try to deliver a message.
                     let message = feed
@@ -158,10 +166,10 @@ where
 
                     match state.deliver(message) {
                         DeliveryStatus::Delivered => {
-                            log::debug!("[{id:?}] Message has been delivered");
+                            log::trace!("[{id:?}] Message has been delivered");
                         }
                         DeliveryStatus::Unexpected(message) => {
-                            log::debug!("[{id:?}] Unexpected message. Storing for future attempts");
+                            log::trace!("[{id:?}] Unexpected message. Storing for future attempts");
                             feed.delay(message);
                         }
                         DeliveryStatus::Error(err) => {
@@ -192,6 +200,7 @@ where
 }
 
 #[derive(Debug)]
+/// [StateMachineHandle] is a synchronous interface to communicate message to a corresponding [StateMachine].
 pub struct StateMachineHandle<Types: StateTypes> {
     tx: mpsc::UnboundedSender<Types::In>,
 }
@@ -209,14 +218,18 @@ impl<Types: StateTypes> StateMachineHandle<Types> {
     }
 }
 
+/// Messages emitted from a [StateMachine] are enriched with some contextual information.
 pub struct Messages<T> {
+    /// Id of the [StateMachine] emitting the messages.
     pub from: StateMachineId,
+    /// Actual messages.
     pub value: Vec<T>,
 
     #[cfg(feature = "tracing")]
     pub span: Span,
 }
 
+/// Enriched result of the [StateMachine] execution.
 pub struct StateMachineResult<T: StateTypes> {
     pub value: Result<BoxedState<T>, StateMachineError<T>>,
 
@@ -621,8 +634,6 @@ mod test {
             }
         }
     }
-
-    // TODO abstract away the setup with the artificial feed.
 
     #[tokio::test]
     async fn faulty_state_leads_to_state_machine_termination() {
