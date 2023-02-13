@@ -1,11 +1,11 @@
+use std::any::type_name;
 use std::collections::VecDeque;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use thiserror::Error;
 use tokio::sync::mpsc;
 
 /// [Feed] combines polling from a queue of messages and a channel. Message can be delayed
 /// and later placed in the queue.
-#[derive(Debug)]
 pub struct Feed<T> {
     /// Messages from [queue] will be delivered first.
     queue: VecDeque<T>,
@@ -48,6 +48,16 @@ impl<T> Feed<T> {
             .drain(..)
             .rev()
             .for_each(|message| self.queue.push_front(message));
+    }
+}
+
+impl<T: Debug> Debug for Feed<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(type_name::<Self>())
+            .field("queue", &format!("{:?}", self.queue))
+            .field("feed", &"Channel")
+            .field("delayed", &format!("{:?}", self.delayed))
+            .finish()
     }
 }
 
