@@ -20,7 +20,7 @@ pub struct StateMachine<T: StateMachineTypes> {
 
 impl<T: StateMachineTypes> StateMachine<T> {
     pub fn new(id: StateMachineId, producer: StateProducer<T>) -> Self {
-        log::trace!("{id}: Creating");
+        log::trace!("{id}: Creating `Pending`");
 
         Self {
             id,
@@ -31,13 +31,27 @@ impl<T: StateMachineTypes> StateMachine<T> {
     }
 
     pub fn new_with_message(id: StateMachineId, message: T::I, producer: StateProducer<T>) -> Self {
-        log::trace!("{id}: Creating with message: {message:?}");
+        log::trace!("{id}: Creating `Pending` with message: {message:?}");
 
         Self {
             id,
             buffer: vec![message],
             waker: None,
             phase: StateMachinePhase::Pending(Pending { producer }),
+        }
+    }
+
+    pub fn new_with_state(id: StateMachineId, state: BoxedState<T>) -> Self {
+        log::trace!("{id}: Creating `Active` with state: {}", state.describe());
+
+        Self {
+            id,
+            buffer: Vec::new(),
+            waker: None,
+            phase: StateMachinePhase::Active(Active {
+                is_state_initialized: false,
+                state: Some(state),
+            }),
         }
     }
 }
@@ -62,12 +76,12 @@ enum StateMachinePhase<T: StateMachineTypes> {
 }
 
 /// `Pending` state  of the state machine.
-pub struct Pending<T: StateMachineTypes> {
+pub(crate) struct Pending<T: StateMachineTypes> {
     producer: StateProducer<T>,
 }
 
 /// `Active` state of the state machine.
-pub struct Active<T: StateMachineTypes> {
+pub(crate) struct Active<T: StateMachineTypes> {
     is_state_initialized: bool,
     /// Current `State` of this state machine.
     /// `Option` is required to easier consume/advance the state when it is possible.
