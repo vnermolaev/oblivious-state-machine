@@ -59,8 +59,9 @@ impl<T: StateMachineTypes> StateMachine<T> {
 /// Function that attempts to construct the initial state by looking at all buffered messages,
 /// it may happen that one or more messages must be removed when constructing the initial state.
 /// `Vec` is used instead of a slice to provide access to `Vec` specific methods, such as `remove`, `retain`, etc.
-pub type StateProducer<T> =
-    fn(&StateMachineId, &mut Vec<<T as StateMachineTypes>::I>) -> Option<BoxedState<T>>;
+pub type StateProducer<T> = Box<
+    dyn Fn(&StateMachineId, &mut Vec<<T as StateMachineTypes>::I>) -> Option<BoxedState<T>> + Send,
+>;
 
 /// State machine progresses through phases: `Pending`, `Active`, and  `Terminated`.
 enum StateMachinePhase<T: StateMachineTypes> {

@@ -302,7 +302,7 @@ mod test {
         let state_machine = StateMachine::new_with_message(
             StateMachineId("Order".to_string()),
             messages.pop_front().unwrap(),
-            |id, messages| {
+            Box::new(|id, messages| {
                 if let Some(pos) = messages
                     .iter()
                     .position(|m| matches!(m, Message::SetOnDisplay))
@@ -318,7 +318,7 @@ mod test {
 
                 log::trace!("{id} Message required to construct the initial state IS NOT found");
                 None
-            },
+            }),
         );
         (messages, state_machine)
     }
