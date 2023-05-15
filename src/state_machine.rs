@@ -179,6 +179,7 @@ impl<T: StateMachineTypes> Active<T> {
                 self.is_state_initialized = true;
                 let messages = state.initialize();
                 if !messages.is_empty() {
+                    self.state = Some(state);
                     return Poll::Ready(Event::Output(messages));
                 }
             }
