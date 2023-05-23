@@ -1,7 +1,7 @@
 [package]
 name = "oblivious_state_machine"
 description = "This crate defines an abstraction level to conveniently describe state machines."
-version = "0.6.8"
+version = "0.6.9"
 edition = "2021"
 authors = ["victor.ermolaev@ing.com"]
 license = "MIT OR Apache-2.0"

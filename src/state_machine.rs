@@ -212,7 +212,7 @@ impl<T: StateMachineTypes> Active<T> {
             }
 
             // If the state can be advanced, advance it.
-            match state.can_advance() {
+            match state.prepare_advance() {
                 Ok(true) => {
                     log::trace!("{id} State can advance");
 
@@ -277,6 +277,12 @@ impl<T: StateMachineTypes> Stream for StateMachine<T> {
 /// State machine ID
 #[derive(Clone, Debug)]
 pub struct StateMachineId(pub String);
+
+impl From<&str> for StateMachineId {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
 
 impl fmt::Display for StateMachineId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

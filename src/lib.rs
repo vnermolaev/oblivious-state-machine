@@ -94,7 +94,7 @@ mod test {
             Delivery::Delivered
         }
 
-        fn can_advance(&self) -> Result<bool, Vec<<Types as StateMachineTypes>::E>> {
+        fn prepare_advance(&mut self) -> Result<bool, Vec<<Types as StateMachineTypes>::E>> {
             if self.is_broken {
                 return Err(vec!["Item is damaged".to_string()]);
             }
@@ -141,7 +141,7 @@ mod test {
             Delivery::Delivered
         }
 
-        fn can_advance(&self) -> Result<bool, Vec<<Types as StateMachineTypes>::E>> {
+        fn prepare_advance(&mut self) -> Result<bool, Vec<<Types as StateMachineTypes>::E>> {
             if self.is_payment_ok && self.is_address_present {
                 return Ok(true);
             }
@@ -193,7 +193,7 @@ mod test {
             Delivery::Delivered
         }
 
-        fn can_advance(&self) -> Result<bool, Vec<<Types as StateMachineTypes>::E>> {
+        fn prepare_advance(&mut self) -> Result<bool, Vec<<Types as StateMachineTypes>::E>> {
             if self.is_canceled {
                 return Ok(true);
             }
@@ -216,7 +216,7 @@ mod test {
     struct Shipped;
 
     impl State<Types> for Shipped {
-        fn can_advance(&self) -> Result<bool, Vec<<Types as StateMachineTypes>::E>> {
+        fn prepare_advance(&mut self) -> Result<bool, Vec<<Types as StateMachineTypes>::E>> {
             Ok(true)
         }
 
@@ -231,7 +231,7 @@ mod test {
     struct Canceled;
 
     impl State<Types> for Canceled {
-        fn can_advance(&self) -> Result<bool, Vec<<Types as StateMachineTypes>::E>> {
+        fn prepare_advance(&mut self) -> Result<bool, Vec<<Types as StateMachineTypes>::E>> {
             Ok(true)
         }
 

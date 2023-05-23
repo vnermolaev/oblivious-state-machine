@@ -15,8 +15,11 @@ pub trait State<T: StateMachineTypes>: Downcast {
         Delivery::Unexpected(message)
     }
 
-    fn can_advance(&self) -> Result<bool, Vec<T::E>>;
+    /// Complete all actions required for a successful [Transition] to the next state, e.g.,
+    /// verify all conditions, compute extra data.
+    fn prepare_advance(&mut self) -> Result<bool, Vec<T::E>>;
 
+    /// Produce a [Transition] to the next state.
     fn advance(self: Box<Self>) -> Transition<T>;
 }
 
