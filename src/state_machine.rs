@@ -230,7 +230,7 @@ impl<T: StateMachineTypes> Active<T> {
 
                             return Poll::Ready(Event::Completion {
                                 state,
-                                buffer: buffer.drain(..).collect(),
+                                buffer: std::mem::take(buffer),
                             });
                         }
                     }

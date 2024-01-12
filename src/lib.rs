@@ -257,7 +257,7 @@ mod test {
                             log::trace!("Terminal state reached");
 
                             // No new event must be produced by the state machine.
-                            assert!(matches!(state_machine.next().await, None));
+                            assert!(state_machine.next().await.is_none());
 
                             return Ok((state, buffer));
                         }
